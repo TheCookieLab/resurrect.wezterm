@@ -1,536 +1,209 @@
-> [!WARNING]
-> This project is archived and no longer maintained. 
-> I'm currently focusing on my PhD and don't find it interesting to work on this anymore. 
-> Please fork/use one of the forks instead 😃
-
 # resurrect.wezterm
 
-Resurrect your terminal environment!⚰️ A plugin to save the state of your windows, tabs and panes. Inspired by [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) and [tmux-continuum](https://github.com/tmux-plugins/tmux-continuum).
+Maintained fork of [MLFlexer/resurrect.wezterm](https://github.com/MLFlexer/resurrect.wezterm),
+which is archived. Saves and restores WezTerm workspaces, windows, tabs, split layouts,
+selection, zoom, titles, working directories and bounded local terminal history.
 
-![Screencastfrom2024-07-2918-50-57-ezgif com-resize](https://github.com/user-attachments/assets/640aefea-793c-486d-9579-1a9c8bb4c1fa)
+This fork restores **fresh shells, not running programs**. It never executes saved argv
+or sends historical output as shell input. Remote domains do not reconnect automatically.
+The [terminal-profile integration](https://github.com/TheCookieLab/terminal-profile)
+adds startup restore, debounced checkpoints, a recovery picker and SSH placeholders that
+reconnect to the existing remote tmux session only after Enter.
 
-## Features
+Compatibility floor: WezTerm `20240203-110809-5046fc22`. No helper plugin, nightly API,
+standalone Lua runtime or configuration-time subprocess/network fetch is required by the loader.
 
-- Restore your windows, tabs and panes with the layout and text from a saved state.
-- Restore shell output from a saved session.
-- Save the state of your current window, with every window, tab and pane state stored in a `json` file.
-- Restore the save from a `json` file.
-- Re-attach to remote domains (e.g. SSH, SSHMUX, WSL, Docker, ect.).
-- Optionally enable encryption and decryption of the saved state.
+## Loading
 
-## Setup example
-
-1. Require the plugin:
-
-```lua
-local wezterm = require("wezterm")
-local resurrect = wezterm.plugin.require("https://github.com/MLFlexer/resurrect.wezterm")
-```
-
-2. Saving workspace, window and/or tab state based on name and title:
+The normal WezTerm plugin loader works:
 
 ```lua
-local resurrect = wezterm.plugin.require("https://github.com/MLFlexer/resurrect.wezterm")
-
-config.keys = {
-  -- ...
-  {
-    key = "w",
-    mods = "ALT",
-    action = wezterm.action_callback(function(win, pane)
-        resurrect.state_manager.save_state(resurrect.workspace_state.get_workspace_state())
-      end),
-  },
-  {
-    key = "W",
-    mods = "ALT",
-    action = resurrect.window_state.save_window_action(),
-  },
-  {
-    key = "T",
-    mods = "ALT",
-    action = resurrect.tab_state.save_tab_action(),
-  },
-  {
-    key = "s",
-    mods = "ALT",
-    action = wezterm.action_callback(function(win, pane)
-        resurrect.state_manager.save_state(resurrect.workspace_state.get_workspace_state())
-        resurrect.window_state.save_window_action()
-      end),
-  },
-}
+local wezterm = require 'wezterm'
+local resurrect = wezterm.plugin.require 'https://github.com/TheCookieLab/resurrect.wezterm'
 ```
 
-3. Loading workspace or window state via. fuzzy finder:
+For reproducible offline configuration, copy a committed `plugin/` tree and `LICENSE`
+into `vendor/resurrect/` beside your config, add the config directory to `package.path`,
+and use `require 'vendor.resurrect.plugin'`. terminal-profile uses this approach and
+records the exact fork revision in its README. Loading does not create a state directory.
+No plugin updates or development-helper dependencies run during configuration evaluation.
+
+## Full-session API
+
+Configure an absolute state directory before saving. **The library does not secure its
+permissions for you.** Create a private directory first (mode 0700 on POSIX, protected
+current-user DACL on Windows). Keep it outside your checkout and plugin cache.
 
 ```lua
-local resurrect = wezterm.plugin.require("https://github.com/MLFlexer/resurrect.wezterm")
+-- Called after your application's private-directory setup:
+local manager = resurrect.state_manager
+assert(manager.change_state_save_dir('/absolute/private/wezterm-state'))
+manager.set_max_nlines(3500)
 
-config.keys = {
-  -- ...
-  {
-    key = "r",
-    mods = "ALT",
-    action = wezterm.action_callback(function(win, pane)
-      resurrect.fuzzy_loader.fuzzy_load(win, pane, function(id, label)
-        local type = string.match(id, "^([^/]+)") -- match before '/'
-        id = string.match(id, "([^/]+)$") -- match after '/'
-        id = string.match(id, "(.+)%..+$") -- remove file extention
-        local opts = {
-          relative = true,
-          restore_text = true,
-          on_pane_restore = resurrect.tab_state.default_on_pane_restore,
-        }
-        if type == "workspace" then
-          local state = resurrect.state_manager.load_state(id, "workspace")
-          resurrect.workspace_state.restore_workspace(state, opts)
-        elseif type == "window" then
-          local state = resurrect.state_manager.load_state(id, "window")
-          resurrect.window_state.restore_window(pane:window(), state, opts)
-        elseif type == "tab" then
-          local state = resurrect.state_manager.load_state(id, "tab")
-          resurrect.tab_state.restore_tab(pane:tab(), state, opts)
-        end
-      end)
-    end),
-  },
-}
-```
-
-4. Optional, enable encryption (recommended):
-   You can optionally configure the plugin to encrypt and decrypt the saved state. [age](https://github.com/FiloSottile/age) is the default encryption provider. [Rage](https://github.com/str4d/rage) and [GnuPG](https://gnupg.org/) encryption are also supported.
-
-4.1. Install `age` and generate a key with:
-
-```sh
-$ age-keygen -o key.txt
-Public key: age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
-```
-
-> [!NOTE]
-> If you prefer to use [GnuPG](https://gnupg.org/), generate a key pair: `gpg --full-generate-key`. Get the public key with `gpg --armor --export your_email@example.com`.
-> The private key is your email or key ID associated with the gpg key.
-
-4.2. Enable encryption in your Wezterm config:
-
-```lua
-local resurrect = wezterm.plugin.require("https://github.com/MLFlexer/resurrect.wezterm")
-resurrect.state_manager.set_encryption({
-  enable = true,
-  method = "age" -- "age" is the default encryption method, but you can also specify "rage" or "gpg"
-  private_key = "/path/to/private/key.txt", -- if using "gpg", you can omit this
-  public_key = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p",
-})
-```
-
-> [!WARNING]
-> FOR WINDOWS USERS
->
-> Due to Windows limitations with `stdin`, errors cannot be returned from the `encrypt` function.
-
-> [!TIP]
-> If the encryption provider is not found in your PATH (common issue for GUI apps on Mac OS), you can specify the absolute path to the executable.
-> e.g. `method = "/opt/homebrew/bin/age"`
-
-Alternate implementations are possible by providing your own `encrypt` and `decrypt` functions:
-
-```lua
-resurrect.state_manager.set_encryption({
-  enable = true,
-  private_key = "/path/to/private/key.txt",
-  public_key = "public_key",
-  encrypt = function(file_path, lines)
-    -- substitute for your encryption command
-    local cmd = string.format(
-      "%s -r %s -o %s",
-      pub.encryption.method,
-      pub.encryption.public_key,
-      file_path:gsub(" ", "\\ ")
-    )
-
-    local success, output = execute_cmd_with_stdin(cmd, lines)
-    if not success then
-      error("Encryption failed:" .. output)
-    end
-  end,
-  decrypt = function(file_path)
-    -- substitute for your decryption command
-    local cmd = { pub.encryption.method, "-d", "-i", pub.encryption.private_key, file_path }
-
-    local success, stdout, stderr = wezterm.run_child_process(cmd)
-    if not success then
-      error("Decryption failed: " .. stderr)
-    end
-
-    return stdout
-  end,
-})
-```
-
-If you wish to share a non-documented way of encrypting your files or think something is missing, then please make a PR or file an issue.
-
-## How do I use it?
-
-I use the builtin `resurrect.state_manager.periodic_save()` to save my workspaces every 15 minutes.
-This ensures that if I close Wezterm, then I can restore my session state to a state which is at most 15 minutes old.
-
-I also use it to restore the state of my workspaces. As I use the plugin [smart_workspace_switcher.wezterm](https://github.com/MLFlexer/smart_workspace_switcher.wezterm),
-to change workspaces whenever I change "project" (git repository).
-I have added the following to my configuration to be able to do this whenever I change workspaces:
-
-```lua
--- loads the state whenever I create a new workspace
-wezterm.on("smart_workspace_switcher.workspace_switcher.created", function(window, path, label)
-  local workspace_state = resurrect.workspace_state
-
-  workspace_state.restore_workspace(resurrect.state_manager.load_state(label, "workspace"), {
-    window = window,
-    relative = true,
-    restore_text = true,
-    on_pane_restore = resurrect.tab_state.default_on_pane_restore,
-  })
-end)
-
--- Saves the state whenever I select a workspace
-wezterm.on("smart_workspace_switcher.workspace_switcher.selected", function(window, path, label)
-  local workspace_state = resurrect.workspace_state
-  resurrect.state_manager.save_state(workspace_state.get_workspace_state())
-end)
-```
-
-You can checkout my configuration [here](https://github.com/MLFlexer/.dotfiles/tree/main/home-manager/config/wezterm).
-
-## Configuration
-
-### Periodic saving of state
-
-`resurrect.state_manager.periodic_save(opts?)` will save the workspace state every 15 minutes by default.
-You can add the `opts` table to change the behaviour. It exposes the following options:
-
-```lua
----@param opts? { interval_seconds: integer?, save_workspaces: boolean?, save_windows: boolean?, save_tabs: boolean? }
-```
-
-`interval_seconds` will save the state every time the supplied number of seconds has surpassed.
-`save_workspaces` will save workspaces if true otherwise not.
-`save_windows` will save windows if true otherwise not.
-`save_tabs` will save tabs if true otherwise not.
-
-### Resurrecting on startup
-
-You can resume from where you left off by resurrecting on startup with
-the following addition to your config:
-
-```lua
-wezterm.on("gui-startup", resurrect.state_manager.resurrect_on_gui_startup)
-```
-
-This will read a file which has been written by the
-`resurrect.state_manager.write_current_state("workspace name", "workspace")` function.
-
-> [!NOTE]
-> For this to work, you must include a way to write the current workspace,
-> be it via. the `resurrect.state_manager.periodic_save` event or when changing workspaces.
-
-### Limiting the amount of output lines saved for a pane
-
-`resurrect.state_manager.set_max_nlines(number)` will limit each pane to save
-at most `number` lines to the state.
-This can improve performance when saving and loading state.
-
-### save_state options
-
-`resurrect.state_manager.save_state(state, opt_name?)` takes an optional string argument,
-which will rename the file to the name of the string.
-
-### restore_opts
-
-Options for restoring state:
-
-```lua
-{spawn_in_workspace: boolean?, -- Restores in the workspace
-relative: boolean?, -- Use relative size when restoring panes
-absolute: boolean?, -- Use absolute size when restoring panes
-close_open_tabs: boolean?, -- Closes all tabs which are open in the window, only restored tabs are left
-close_open_panes: boolean?, -- Closes all panes which are open in the tab, only keeping the panes to be restored
-pane: Pane?, -- Restore in this window
-tab: MuxTab?, -- Restore in this window
-window: MuxWindow, -- Restore in this window
-resize_window: boolean?, -- Resizes the window, default: true
-on_pane_restore: fun(pane_tree: pane_tree)} -- Function to restore panes, use resurrect.tab_state.default_on_pane_restore
-```
-
-#### Windows not resizing correctly
-
-Some users has had problems with `window_decorations` and `window_padding`
-configuration options, which caused issues when resizing, see [comment](https://github.com/MLFlexer/resurrect.wezterm/issues/72#issuecomment-2582912347).
-To avoid this, set the `resize_window` to false.
-
-### Restoring into the current window
-
-To restore a window state into the current window use the `restore_window`
-function with `restore_opts` containing the window and `close_open_tabs` like so:
-
-```lua
-local opts = {
-  close_open_tabs = true,
-  window = pane:window(),
-  on_pane_restore = resurrect.tab_state.default_on_pane_restore,
-  relative = true,
-  restore_text = true,
-}
-resurrect.window_state.restore_window(pane:window(), state, opts)
-```
-
-This will restore the state into the passed window and additionally close all
-the tabs in the window, such that only the restored tabs are visible after restoring.
-
-### fuzzy_load opts
-
-the `resurrect.fuzzy_loader.fuzzy_load(window, pane, callback, opts?)` function takes an
-optional `opts` argument, which has the following types:
-
-```lua
----@alias fmt_fun fun(label: string): string
----@alias fuzzy_load_opts {
-  title: string, -- dialog title, default: "Load state"
-  description: string, -- description, default: "Select State to Load and press Enter = accept, Esc = cancel, / = filter"
-  fuzzy_description: string, -- description in fyzzy search mode, default: "Search State to Load: "
-  is_fuzzy: boolean, -- enter directly in fuzzy mode, default: true
-  ignore_workspaces: boolean, -- does not show workspaces, default: false
-  ignore_tabs: boolean, -- does not show tabs, default: false
-  ignore_windows: boolean, -- does not show windows, default: false
-  fmt_window: fmt_fun, -- format function for window state name (wezterm.format)
-  fmt_workspace: fmt_fun, -- format function for workspace state name
-  fmt_tab: fmt_fun, -- format function for tab state name
-  fmt_date: fmt_fun, -- format function for date
-  show_state_with_date: boolean, -- show last update of the state file, default: false
-  date_format: string, -- date formatting, default: "%d-%m-%Y %H:%M:%S"
-  ignore_screen_width: boolean, -- whether or not to shrink the list if the window is too narrow, default: true
-  name_truncature: string, -- when state name is truncated, this string replaces the truncation
-  min_filename_size: number -- minimum size of state name in case of truncation
-}
-```
-
-This is used to format labels, ignore saved state, change the title and change the behaviour of the fuzzy finder.
-
-### Change the directory to store the saved state
-
-```lua
-resurrect.state_manager.change_state_save_dir("/some/other/directory")
-```
-
-> [!WARNING]
-> FOR WINDOWS USERS
->
-> You must ensure that there is write access to the directory where the state is stored,
-> as such it is suggested that you set your own state directory like so:
->
-> ```lua
-> -- Set some directory where Wezterm has write access
-> resurrect.state_manager.change_state_save_dir("C:\\Users\\<user>\\Desktop\\state\\")
-> ```
-
-### Events
-
-This plugin emits the following events that you can use for your own callback functions:
-
-- `resurrect.error(err)`
-- `resurrect.file_io.decrypt.finished(file_path)`
-- `resurrect.file_io.decrypt.start(file_path)`
-- `resurrect.file_io.encrypt.finished(file_path)`
-- `resurrect.file_io.encrypt.start(file_path)`
-- `resurrect.file_io.sanitize_json.finished(data)`
-- `resurrect.file_io.sanitize_json.start(data)`
-- `resurrect.fuzzy_loader.fuzzy_load.finished(window, pane)`
-- `resurrect.fuzzy_loader.fuzzy_load.start(window, pane)`
-- `resurrect.state_manager.delete_state.finished(file_path)`
-- `resurrect.state_manager.delete_state.start(file_path)`
-- `resurrect.state_manager.load_state.finished(name, type)`
-- `resurrect.state_manager.load_state.start(name, type)`
-- `resurrect.state_manager.periodic_save.start(opts)`
-- `resurrect.state_manager.periodic_save.finished(opts)`
-- `resurrect.file_io.write_state.finished(file_path, event_type)`
-- `resurrect.file_io.write_state.start(file_path, event_type)`
-- `resurrect.tab_state.restore_tab.finished`
-- `resurrect.tab_state.restore_tab.start`
-- `resurrect.window_state.restore_window.finished`
-- `resurrect.window_state.restore_window.start`
-- `resurrect.workspace_state.restore_workspace.finished`
-- `resurrect.workspace_state.restore_workspace.start`
-
-Example: sending a toast notification when specified events occur, but suppress on `periodic_save()`:
-
-```lua
-local resurrect_event_listeners = {
-  "resurrect.error",
-  "resurrect.state_manager.save_state.finished",
-}
-local is_periodic_save = false
-wezterm.on("resurrect.periodic_save", function()
-  is_periodic_save = true
-end)
-for _, event in ipairs(resurrect_event_listeners) do
-  wezterm.on(event, function(...)
-    if event == "resurrect.state_manager.save_state.finished" and is_periodic_save then
-      is_periodic_save = false
-      return
-    end
-    local args = { ... }
-    local msg = event
-    for _, v in ipairs(args) do
-      msg = msg .. " " .. tostring(v)
-    end
-    wezterm.gui.gui_windows()[1]:toast_notification("Wezterm - resurrect", msg, nil, 4000)
-  end)
+-- Called by a runtime action, not during configuration evaluation:
+local snapshot, capture_error = resurrect.session_state.capture()
+if not snapshot then
+  wezterm.log_error(capture_error)
+  return
+end
+local path, warning_or_error = manager.save_session(snapshot)
+if not path then
+  wezterm.log_error(warning_or_error)
+elseif warning_or_error then
+  wezterm.log_warn(warning_or_error)
 end
 ```
 
-## State files
+- `session_state.capture(opts?) -> state | nil, error`: every mux window, grouped by
+  workspace; includes active workspace/window, ordered tabs, cell sizes and pane trees.
+  Rejects empty or inconsistent captures rather than replacing a good save.
+- `state_manager.save_session(state) -> path | nil, warning_or_error`: validated,
+  immutable `session/snapshot-<20-digit-generation>.json`; retains the newest three
+  valid generations only after successful publication. Corrupt generations are preserved.
+- `state_manager.load_session(path?) -> state | nil, warning_or_error, info`: newest
+  valid generation by default, falling back past corrupt files. Inspect the warning
+  even when a state was returned. A missing initial session is a normal fresh start.
+- `state_manager.list_sessions() -> records, warning_or_error`: newest valid generations
+  with immutable-path `id`, `generation`, `saved_at`, `windows`, `tabs`, `panes` and decoded `state`.
+- `session_state.restore(state, opts?) -> windows | nil, error, partial_windows`:
+  validates before spawning; creates new windows without closing existing ones or
+  mutating the decoded state. `opts.workspace_names` maps saved workspace names to
+  new names for additive recovery. The caller handles partial failures and startup policy.
 
-State files are json files, which will be decoded into lua tables.
-This can be used to create your own layout files which can then be loaded.
-Here is an example of a json file:
+## Capture and restore options
 
-```json
-{
-   "window_states":[
-      {
-         "size":{
-            "cols":191,
-            "dpi":96,
-            "pixel_height":1000,
-            "pixel_width":1910,
-            "rows":50
-         },
-         "tabs":[
-            {
-               "is_active":true,
-               "pane_tree":{
-                  "cwd":"/home/user/",
-                  "domain": "SSHMUX:domain",
-                  "height":50,
-                  "index":0,
-                  "is_active":true,
-                  "is_zoomed":false,
-                  "left":0,
-                  "pixel_height":1000,
-                  "pixel_width":1910,
-                  "process":"/bin/bash", -- value is empty if attached to a remote domain
-                  "text":"Some text", -- not saved if attached to a remote domain, see https://github.com/MLFlexer/resurrect.wezterm/issues/41
-                  "top":0,
-                  "width":191
-               },
-               "title":"tab_title"
-            }
-         ],
-         "title":"window_title"
-      }
-   ],
-   "workspace":"workspace_name"
-}
-```
+`get_tab_state(tab, opts?)`, `get_window_state(window, opts?)`,
+`get_workspace_state(opts?)` and `session_state.capture(opts?)` accept:
 
-### Delete a saved state file via. fuzzy finder
+- `capture_process = true` to retain available process metadata for library consumers;
+  default false. Missing process info/name is valid. Metadata is never replayed.
+- `on_pane_capture(pane, leaf)` to attach serializable metadata. Returning false skips
+  cwd, text and process capture, useful for SSH identities and private panes.
+- `pane_tree.save_non_local_domains = true` is an opt-in module flag for non-local
+  history capture. Default false. It does **not** authorize history injection there.
 
-You can use the fuzzy finder to delete a saved state file by adding a keybind to your config:
+Restore options include:
 
-```lua
-local resurrect = wezterm.plugin.require("https://github.com/MLFlexer/resurrect.wezterm")
+- `spawn_pane(leaf, opts) -> SpawnCommand, optional_notice` to supply a trusted current
+  spawn policy. Called for every initial pane, tab and split. Do not execute snapshot argv.
+- `on_pane_restore(leaf)` receives a callback-local leaf copy with its live `pane`.
+  `tab_state.default_on_pane_restore` inserts sanitized local history with explicit
+  previous-session markers. Never inject this text through `send_text`.
+- `on_warning(message)` receives one summarized set of nonfatal restore problems.
+- Workspace restores support `spawn_in_workspace`, `workspace_name` and `window`.
+  Only the reused window is moved; unrelated workspaces are never renamed or merged.
 
-config.keys = {
-  -- ...
-  {
-    key = "d",
-    mods = "ALT",
-    action = wezterm.action_callback(function(win, pane)
-      resurrect.fuzzy_loader.fuzzy_load(win, pane, function(id)
-          resurrect.state_manager.delete_state(id)
-        end,
-        {
-          title = "Delete State",
-          description = "Select State to Delete and press Enter = accept, Esc = cancel, / = filter",
-          fuzzy_description = "Search State to Delete: ",
-          is_fuzzy = true,
-        })
-    end),
-  },
-}
-```
+Default spawning uses fresh native-local or configured WSL shells. Other domains
+(SSH, SSHMUX, Unix, TLS, missing WSL) become labelled local shells with a disconnected
+notice. A missing local cwd falls back to the default directory with a warning; WSL
+paths are not rewritten into Windows paths. Full-screen programs are not restarted.
 
-## Augmenting the command palette
+History insertion must occur after the new shell has initialized. terminal-profile
+queues delivery, rearms it after resize/reload, and blocks saving/recovery until it
+finishes. History is moved above the redrawable fresh-shell viewport so PowerShell
+redraw/resize does not erase it. Saved controls are stripped; fixed VT bookkeeping
+preserves the live screen and cursor. History is plain text, not a terminal/application
+state dump, and does not preserve colors or unsaved buffers. Built-in injection is
+local-only, including when non-local capture is explicitly enabled.
 
-If you would like to add entries in your Wezterm command palette for renaming and switching workspaces:
+Pane trees use a binary slicing representation: leaves have `kind='pane'`; splits
+have `kind='split'`, `direction='Right'|'Bottom'`, `first`, `second`, `first_extent`
+and `second_extent`. Integer-cell reconstruction accounts for the divider cell and
+subtree minimum sizes. Aligned grids, T-shaped and nested layouts restore every pane
+exactly once. Overlaps, holes, duplicate panes, ambiguous active selections and
+undersized reused tabs fail explicitly instead of silently duplicating/dropping panes.
+Use `pane_tree.first_leaf`, `leaves`, `map` and `fold`; map/fold visit leaves only.
+
+## Named workspace, window and tab saves
+
+The smaller state APIs remain available:
 
 ```lua
-local workspace_switcher = wezterm.plugin.require("https://github.com/MLFlexer/smart_workspace_switcher.wezterm")
+local manager = resurrect.state_manager
+local snapshot, err = resurrect.workspace_state.get_workspace_state()
+if snapshot then
+  local ok, save_error = manager.save_state(snapshot, 'work')
+  if not ok then wezterm.log_error(save_error) end
+else
+  wezterm.log_error(err)
+end
 
-wezterm.on("augment-command-palette", function(window, pane)
-  local workspace_state = resurrect.workspace_state
-  return {
-    {
-      brief = "Window | Workspace: Switch Workspace",
-      icon = "md_briefcase_arrow_up_down",
-      action = workspace_switcher.switch_workspace(),
-    },
-    {
-      brief = "Window | Workspace: Rename Workspace",
-      icon = "md_briefcase_edit",
-      action = wezterm.action.PromptInputLine({
-        description = "Enter new name for workspace",
-        action = wezterm.action_callback(function(window, pane, line)
-          if line then
-            wezterm.mux.rename_workspace(wezterm.mux.get_active_workspace(), line)
-            resurrect.state_manager.save_state(workspace_state.get_workspace_state())
-          end
-        end),
-      }),
-    },
-  }
-end)
+-- Bind these returned actions in config.keys:
+local save_window = resurrect.window_state.save_window_action()
+local save_tab = resurrect.tab_state.save_tab_action()
 ```
 
-## FAQ
+`load_state(name, 'workspace'|'window'|'tab')` loads a named save and falls back to its
+previous-good `.bak`. `fuzzy_loader.fuzzy_load(window, pane, callback, opts?)` supplies
+literal relative IDs; `state_manager.parse_state_id(id)` returns type and decoded
+name. Pass only listed IDs to `delete_state(id)`, not absolute paths.
 
-### Pane CWD is not correct on Windows
+Names are encoded as reversible UTF-8 hex with an `s-` prefix: separators, reserved
+Windows names, case distinctions and trailing punctuation do not collide. Existing
+upstream `+`-encoded filenames and the old pane-tree schema are not migration aliases;
+use a new state directory. No directory creation via cmd.exe/VBS or recursive shell
+listing remains. Named saves check writes, flush, close, validation and publication;
+invalid destinations are quarantined without destroying a good backup.
 
-If your pane CWD is incorrect then it might be a problem with the shell
-integration and OSC 7. See [Wezterm documentation](https://wezfurlong.org/wezterm/shell-integration.html).
+Optional named-state encryption remains available through `state_manager.set_encryption`
+and the existing age/rage/GPG implementation. It needs those external tools and is not
+enabled by this fork or terminal-profile. **Full-session snapshots reject encryption**
+with an explicit error if requested; they never silently write plaintext in that case.
+The existing encryption command implementation has not been redesigned in this fork.
 
-### How do I keep my plugins up to date?
+## Lifecycle limits
 
-#### Manually
+Stable WezTerm has no Lua shutdown/window-close callback. A configuration must use
+runtime checkpoints for native close, OS shutdown and crashes, and a save-then-quit
+action when an exact final flush is required. Do not save an empty teardown layout.
+`gui-startup` does not run for `connect`/`--attach`; attach workflows need their own
+`gui-attached`/mux-server policy. Never automatically restore onto an attached live mux.
+Config reload is not a cold startup and must not trigger another restore.
 
-Wezterm git clones your plugins into a plugin directory.
-Enter `wezterm.plugin.list()` in the Wezterm Debug Overlay (`Ctrl + Shift + L`)
-to see where they are stored. You can then update them individually using git pull.
+One persistent GUI process should own each state directory. This storage is not a
+multi-process lock service. Exact desktop pixel positions, local process survival,
+command replay and unsaved application buffers are outside the contract.
 
-#### Automatically
+## Review of all 11 open upstream pull requests
 
-Add `wezterm.plugin.update_all()` to your Wezterm config.
+Reviewed against archived upstream `65cbbbf6d2c76f3e36af7610a356fc190fcb6147`.
+Changes were reconciled into one implementation, not merged blindly. Credit belongs
+to the original contributors below for the adapted fixes and design inputs.
 
-## Contributions
+| PR / contributor | Reviewed head | Decision in this fork/integration |
+|---|---|---|
+| [146](https://github.com/MLFlexer/resurrect.wezterm/pull/146) — @FelixIsaac | `24d8cdd1197b371f72462cb3845d3c7382f0cf54` | Adapted opt-in non-local text capture; retained local-only history injection and no `send_text` fallback. |
+| [145](https://github.com/MLFlexer/resurrect.wezterm/pull/145) — @midgramr | `b7241bac48e5bde537a6570612b9af3d26f60747` | Adapted nil-safe process capture; rejected unquoted process execution and all automatic argv replay. |
+| [138](https://github.com/MLFlexer/resurrect.wezterm/pull/138) — @fireboy1919 | `ba1dbb279f8bef1608b70a22675f527efddb535f` | Documented startup versus attach semantics; rejected the racing marker/status restore recipe. |
+| [137](https://github.com/MLFlexer/resurrect.wezterm/pull/137) — @fireboy1919 | `1755c366b5d6c3a40ea20e35eab5d419b03f9180` | Adapted structural autosave in terminal-profile using supported `update-status`, process-wide signatures and debounce; no nonexistent focus event/count-only observer. |
+| [136](https://github.com/MLFlexer/resurrect.wezterm/pull/136) — @SingingTree | `d7a3e8237046c2fdaa911ab33508e4b2f83c5604` | Adapted path joins and useful behavioral cases; replaced shell/probe mkdir with checked, quiet runtime creation. |
+| [134](https://github.com/MLFlexer/resurrect.wezterm/pull/134) — @lowjoel | `eca8ed3d20c3c18da9fa486ddac292a470d2f4f0` | Subsumed by the reconciled path implementation; rejected colliding `+` substitutions. |
+| [130](https://github.com/MLFlexer/resurrect.wezterm/pull/130) — @vike2000 | `d28536dc91e2622c9d1d34b85d55b679b37252e2` | Kept the no-console-flash goal; rejected code that probes but fails to create missing directories and mishandles absolute/UNC roots. This is a directory fix, not a split fix. |
+| [128](https://github.com/MLFlexer/resurrect.wezterm/pull/128) — @andreystepanov | `a24d52a0ea8b767521c06d8f4baf0f48f6f61a6e` | Not adopted: Nix executable/argument rewriting serves command replay, which this fork deliberately does not perform, and can discard adjacent editor arguments. |
+| [127](https://github.com/MLFlexer/resurrect.wezterm/pull/127) — @tdragon | `ec666510dcf3d954ecca0595c6614213715ec599` | Replaced overlapping right/bottom lists with exact binary slicing; rejected a nil guard that hides duplicate panes. |
+| [123](https://github.com/MLFlexer/resurrect.wezterm/pull/123) — @userux | `a16048137a24ba170426c49eeea6b485ec2599ee` | Fixed both save actions to import `resurrect.state_manager`, including the leftover broken root import. No compatibility alias. |
+| [118](https://github.com/MLFlexer/resurrect.wezterm/pull/118) — @fvalenza | `9a51cf56b1ae9de0bed6bec4d984ac19067b5e69` | Adapted target-workspace spawning and moving only the reused window; never rename the user's entire active workspace. |
 
-Suggestions, Issues and PRs are welcome!
-The features currently implemented are the ones I use the most, but your
-workflow might differ. As such, if you have any proposals on how to improve
-the plugin, then please feel free to make an issue or even better a PR!
+Additional improvements: full-session capture, private profile storage, checked temp
+publication, three-generation recovery, preserved corruption evidence, additive recovery,
+non-executing restoration and offline vendoring. Original upstream code remains MIT;
+see [LICENSE](LICENSE).
 
-### Technical details
+## Verification
 
-Restoring of the panes are done via. the `pane_tree` file,
-which has functions to work on a binary-like-tree of the panes.
-Each node in the pane_tree represents a possible split pane.
-If the pane has a `bottom` and/or `right` child, then the pane is split.
-If you have any questions to the implementation,
-then I suggest you read the code or open an issue and I will try to clarify.
-Improvements to this section is also very much welcome.
+With Python 3 and WezTerm installed:
 
-## Disclaimer
+```sh
+python3 -m unittest discover -s tests
+# Windows: py -3 -m unittest discover -s tests
+```
 
-If you don't setup encryption then the state of your terminal is saved as
-plaintext json files. Please be aware that the plugin will by default write the
-output of the shell among other things, which could contain secrets or other
-vulnerable data. If you do not want to store this as plaintext, then please use
-the provided documentation for encrypting state.
+Tests execute fixtures in WezTerm's embedded Lua with real JSON/filesystem operations
+and require an explicit success artifact; WezTerm silently falling back to default
+configuration is not a pass. Geometry fixtures use deterministic mux models. The
+terminal-profile suite covers lifecycle transitions, recovery and SSH placeholders.
+
+Native Windows acceptance additionally exercised multi-workspace/grid/zoom/history
+restoration, PowerShell redraw, native close and crash checkpoints, corruption fallback,
+missing directories, denied writes and real SSH/tmux reconnection. Native macOS/Linux
+GUI behavior has not been verified; fixtures are not a substitute for those checks.
