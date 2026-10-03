@@ -1,0 +1,74 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WEZTERM_VERSION: 20240203-110809-5046fc22
+
+jobs:
+  test:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install WezTerm (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/wezterm.deb"
+          curl --fail --location --silent --show-error \
+            "https://github.com/wezterm/wezterm/releases/download/$WEZTERM_VERSION/wezterm-$WEZTERM_VERSION.Ubuntu22.04.deb" \
+            --output "$package"
+          echo "86358dab5794a4fb63f7c91dd68d4fdc3da58faad648a58fc77d2bd51c7b0686  $package" | sha256sum --check --strict
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes "$package"
+
+      - name: Install WezTerm (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'wezterm.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'wezterm'
+          $version = $env:WEZTERM_VERSION
+          Invoke-WebRequest "https://github.com/wezterm/wezterm/releases/download/$version/WezTerm-windows-$version.zip" -OutFile $archive
+          $expected = '57e5d03b585303d81e8b8e96d1230362852eb39aca92b3b29c7a42cfb82f9ac4'
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) {
+            throw 'WezTerm archive checksum mismatch'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $executable = Get-ChildItem -LiteralPath $destination -Filter wezterm.exe -Recurse | Select-Object -First 1
+          if (-not $executable) { throw 'WezTerm archive did not contain wezterm.exe' }
+          $executable.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Report WezTerm version
+        run: wezterm --version
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
