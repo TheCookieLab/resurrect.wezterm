@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022]
+        os: [ubuntu-22.04, windows-2022, macos-15]
 
     steps:
       - name: Check out source
@@ -66,6 +66,22 @@ jobs:
           $executable = Get-ChildItem -LiteralPath $destination -Filter wezterm.exe -Recurse | Select-Object -First 1
           if (-not $executable) { throw 'WezTerm archive did not contain wezterm.exe' }
           $executable.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install WezTerm (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/wezterm-macos.zip"
+          destination="$RUNNER_TEMP/wezterm-macos"
+          curl --fail --location --silent --show-error \
+            "https://github.com/wezterm/wezterm/releases/download/$WEZTERM_VERSION/WezTerm-macos-$WEZTERM_VERSION.zip" \
+            --output "$archive"
+          echo "e77388cad55f2e9da95a220a89206a6c58f865874a629b7c3ea3c162f5692224  $archive" | shasum --algorithm 256 --check
+          ditto -x -k "$archive" "$destination"
+          binary_dir="$destination/WezTerm-macos-$WEZTERM_VERSION/WezTerm.app/Contents/MacOS"
+          test -x "$binary_dir/wezterm"
+          echo "$binary_dir" >> "$GITHUB_PATH"
 
       - name: Report WezTerm version
         run: wezterm --version

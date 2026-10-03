@@ -16,7 +16,7 @@ include a behavioral regression when appropriate, and describe what you exercise
 | `tests/layout.lua` | Pane geometry, selection, spawning and session behavior |
 | `tests/storage.lua` | Paths, real filesystem I/O, backups and checkpoint recovery |
 | `docs/usage.md` | Installation, API contracts and integration limits |
-| `.github/workflows/tests.yml` | Windows and Linux test workflow |
+| `.github/workflows/tests.yml` | Windows, Linux and macOS test workflow |
 
 Runtime snapshots belong in a private directory outside this checkout. The library
 creates its state subdirectories at runtime; no checked-in `state/` tree is needed.
@@ -61,14 +61,15 @@ runtime; add isolated pure-Lua tests only when they provide distinct behavioral 
 ### Continuous integration
 
 [The test workflow](.github/workflows/tests.yml) runs on pushes, pull requests and manual
-dispatches, on `ubuntu-22.04` and `windows-2022`. Both jobs install the exact compatibility-floor
-release from the official WezTerm GitHub assets, verify its SHA-256, then run the same
-unittest command used locally. The Windows archive is extracted into the runner's
-temporary directory; the Linux job installs the official Ubuntu package.
+dispatches, on `ubuntu-22.04`, `windows-2022` and `macos-15` (Apple Silicon). All jobs
+install the exact compatibility-floor release from the official WezTerm GitHub assets,
+verify its SHA-256, then run the same unittest command used locally. The Windows
+archive and macOS application bundle are extracted into the runner's temporary
+directory; the Linux job installs the official Ubuntu package.
 
 The workflow needs no secrets, display server or SSH host. GitHub actions are pinned to
 commit SHAs, and the token has read-only repository access. No dedicated WezTerm setup
-action is required. When updating the runtime, update the release version, both asset
+action is required. When updating the runtime, update the release version, all asset
 checksums and these compatibility notes together; do not replace a pinned release with
 an unversioned package-manager install.
 

@@ -9,9 +9,10 @@ Notable changes to this maintained fork. Dates use YYYY-MM-DD.
 - Replace the implementation-heavy README with a short project overview; move API,
   storage and lifecycle guidance to [the usage guide](docs/usage.md).
 - Preserve the eleven-PR upstream review and contributor credits in this changelog.
-- Add [contributor guidance](CONTRIBUTING.md) and headless Windows/Linux test CI using
-  checksum-pinned official WezTerm releases. Keep the actual embedded Lua runtime
-  rather than replacing its JSON and filesystem behavior with mocks.
+- Add [contributor guidance](CONTRIBUTING.md) and headless test CI on Windows, Linux
+  and macOS (Apple Silicon) using checksum-pinned official WezTerm releases. Keep the
+  actual embedded Lua runtime rather than replacing its JSON and filesystem behavior
+  with mocks.
 - Remove obsolete in-checkout state placeholders and ignore runtime data and Python caches.
 
 ## 2026-10-03 — Maintained fork
