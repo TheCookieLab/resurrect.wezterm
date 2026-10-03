@@ -141,8 +141,9 @@ local function new_pane(tab, rect, props)
 		return self.props.text
 	end
 	function pane:get_dimensions()
-		return { cols = self.rect.width, viewport_rows = self.rect.height, scrollback_rows = self.props.scrollback or 10 }
+		return { cols = self.rect.width, viewport_rows = self.rect.height, scrollback_rows = self.props.scrollback or 10, physical_top = 0 }
 	end
+	function pane:get_cursor_position() return { x = 0, y = 0 } end
 	function pane:get_foreground_process_info()
 		self.reads.process = self.reads.process + 1
 		return self.props.process

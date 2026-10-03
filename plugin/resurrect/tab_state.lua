@@ -370,7 +370,17 @@ function pub.default_on_pane_restore(leaf)
 		local text = pane_tree_mod.limit_lines(pane_tree_mod.sanitize_text(leaf.text), pane_tree_mod.max_nlines)
 		text = text:gsub("%s+$", "")
 		if text ~= "" then
-			pane:inject_output("[Previous session history]\r\n" .. text .. "\r\n[End of previous session history]\r\n")
+			-- Put history above the viewport: shell redraws may erase every visible row.
+			-- Preserve the fresh shell screen/cursor using our own fixed VT bookkeeping,
+			-- never terminal controls from either saved or live text.
+			if pane:is_alt_screen_active() then return end
+			local dims, cursor = pane:get_dimensions(), pane:get_cursor_position()
+			local screen = pane_tree_mod.sanitize_text(pane:get_lines_as_text(dims.viewport_rows) or "")
+			local row = math.max(0, math.min(dims.viewport_rows - 1, cursor.y - dims.physical_top))
+			local home = "\27[H"
+			pane:inject_output(home .. "\27[2J[Previous session history]\r\n" .. text
+				.. "\r\n[End of previous session history]" .. string.rep("\r\n", dims.viewport_rows)
+				.. home .. screen .. string.format("\27[%d;%dH", row + 1, cursor.x + 1))
 		end
 	end
 end
