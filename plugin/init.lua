@@ -1,30 +1,17 @@
-local wezterm = require("wezterm") --[[@as Wezterm]] --- this type cast invokes the LSP module for Wezterm
-local dev = wezterm.plugin.require("https://github.com/chrisgve/dev.wezterm")
+-- Resolve the actual loader name for URL plugins and offline vendoring.
+-- Loading never creates directories or fetches code.
+local module_name = ...
+local path, err = package.searchpath(module_name, package.path)
+assert(path, err)
+local directory = assert(path:match("^(.*)[/\\]init%.lua$"), "Cannot locate resurrect plugin directory")
+package.path = directory .. "/?.lua;" .. package.path
 
-local pub = {}
-
---- checks if the user is on windows
-local is_windows = wezterm.target_triple == "x86_64-pc-windows-msvc"
-local separator = is_windows and "\\" or "/"
-
-local function init()
-	-- enable_sub_modules()
-	local opts = {
-		auto = true,
-		keywords = { "github", "MLFlexer", "resurrect", "wezterm" },
-	}
-	local plugin_path = dev.setup(opts)
-
-	require("resurrect.state_manager").change_state_save_dir(plugin_path .. separator .. "state" .. separator)
-
-	-- Export submodules
-	pub.workspace_state = require("resurrect.workspace_state")
-	pub.window_state = require("resurrect.window_state")
-	pub.tab_state = require("resurrect.tab_state")
-	pub.fuzzy_loader = require("resurrect.fuzzy_loader")
-	pub.state_manager = require("resurrect.state_manager")
-end
-
-init()
-
-return pub
+return {
+  workspace_state = require("resurrect.workspace_state"),
+  window_state = require("resurrect.window_state"),
+  tab_state = require("resurrect.tab_state"),
+  fuzzy_loader = require("resurrect.fuzzy_loader"),
+  state_manager = require("resurrect.state_manager"),
+  pane_tree = require("resurrect.pane_tree"),
+  session_state = require("resurrect.session_state"),
+}

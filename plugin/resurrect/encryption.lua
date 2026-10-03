@@ -57,9 +57,16 @@ local function execute_cmd_with_stdin(cmd, input)
 		if not stdin then
 			return false, "Failed to execute: " .. cmd
 		end
-		stdin:write(input)
+		local wrote, write_err = stdin:write(input)
+		if not wrote then
+			stdin:close()
+			return false, "Failed to write to: " .. cmd .. ": " .. tostring(write_err)
+		end
 		stdin:flush()
-		stdin:close()
+		local closed, _, code = stdin:close()
+		if not closed then
+			return false, '"' .. cmd .. '" failed with exit status ' .. tostring(code)
+		end
 		return true, '"' .. cmd .. '" <input> ran successfully.'
 	end
 end

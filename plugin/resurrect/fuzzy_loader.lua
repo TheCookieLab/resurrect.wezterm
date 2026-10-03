@@ -50,122 +50,60 @@ pub.default_fuzzy_load_opts = {
 	end,
 }
 
--- Optimized recursive JSON file finder for all platforms
----@param base_path string starting path from which the recursive search takes place
----@return string|nil
-local function find_json_files_recursive(base_path)
-	local cmd
-	local stdout
-	local suc, err
+local STATE_TYPES = { "workspace", "window", "tab" }
 
-	if utils.is_windows then
-		-- For Windows, use VBS for better performance and truly invisible execution
-		local temp_vbs = os.tmpname() .. ".vbs"
-		local temp_out = os.tmpname() .. ".txt"
-
-		local vbs_script = string.format(
-			[[
-                Set fso = CreateObject("Scripting.FileSystemObject")
-                Set outFile = fso.CreateTextFile("%s", True)
-                
-                Sub ProcessFolder(folderPath)
-                    On Error Resume Next
-                    Set folder = fso.GetFolder(folderPath)
-                    If Err.Number <> 0 Then
-                        Exit Sub
-                    End If
-                    
-                    ' Process files in current folder
-                    For Each file in folder.Files
-                        If LCase(fso.GetExtensionName(file.Name)) = "json" Then
-                            epoch = DateDiff("s", "01/01/1970 00:00:00", file.DateLastModified)
-                            outFile.WriteLine(epoch & " " & file.Path)
-                        End If
-                    Next
-                    
-                    ' Process subfolders recursively
-                    For Each subFolder in folder.SubFolders
-                        ProcessFolder(subFolder.Path)
-                    Next
-                End Sub
-                
-                ProcessFolder("%s")
-                outFile.Close
-            ]],
-			temp_out:gsub("\\", "\\\\"),
-			base_path:gsub("\\", "\\\\")
-		)
-
-		-- Create a second VBS script that will run the first one invisibly
-		local launcher_vbs = os.tmpname() .. "_launcher.vbs"
-		local launcher_script = string.format(
-			[[
-                Set WshShell = CreateObject("WScript.Shell")
-                WshShell.Run "wscript.exe //nologo %s", 0, True
-            ]],
-			temp_vbs
-		)
-
-		-- Write the scripts
-		suc, err = file_io.write_file(temp_vbs, vbs_script)
-		if not suc then
-			wezterm.emit("resurrect.error", err)
-			return
-		end
-
-		suc, err = file_io.write_file(launcher_vbs, launcher_script)
-		if not suc then
-			wezterm.emit("resurrect.error", err)
-			os.remove(temp_vbs) -- by the time we are here the `temb_vbs` file already exists so we should clean up
-			return
-		end
-		-- Execute using launcher (completely hidden)
-		os.execute("wscript.exe //nologo " .. launcher_vbs)
-
-		suc, stdout = file_io.read_file(temp_out)
-
-		-- Clean up temp files
-		os.remove(temp_vbs)
-		os.remove(launcher_vbs)
-		os.remove(temp_out)
-
-		if suc then
-			return stdout
-		else
-			wezterm.emit("resurrect.error", stdout)
-			return
-		end
-	elseif utils.is_mac then
-		-- macOS recursive find command for JSON files
-		cmd = 'find "' .. base_path .. '" -type f -name "*.json" -print0 | xargs -0 stat -f "%m %N"'
-	else
-		-- Linux optimized recursive find command for JSON files
-		cmd = string.format(
-			'find "$(realpath %q)" -type f -name "*.json" -printf "%%T@ %%p\\n" | awk \'{split($1, a, "."); print a[1], $2}\'',
-			base_path
-		)
+-- List the saved state files of every enabled type. Each entry carries the
+-- literal relative ID ("<type>/<stem>.json"), a label with the decoded state
+-- name, and (only when dates are shown) the time it was saved.
+---@param base_path string|nil the state directory
+---@param opts table
+---@return table[]
+local function find_state_files(base_path, opts)
+	local entries = {}
+	if type(base_path) ~= "string" then
+		return entries
 	end
-
-	-- Execute the command and capture stdout for non-Windows
-	suc, stdout = utils.execute(cmd)
-
-	if suc then
-		return stdout
-	else
-		wezterm.emit("resurrect.error", stdout)
-		return
+	for _, state_type in ipairs(STATE_TYPES) do
+		if not opts[string.format("ignore_%ss", state_type)] then
+			local ok, listing = pcall(wezterm.read_dir, utils.join_path(base_path, state_type))
+			local found = {}
+			for _, path in ipairs(ok and listing or {}) do
+				local stem = utils.basename(path):match("^(.+)%.json$")
+				local name = stem and utils.decode_state_name(stem)
+				if name then
+					local epoch
+					if opts.show_state_with_date then
+						local text = file_io.read_file(path)
+						epoch = text and text:match('"saved_at"%s*:%s*(%d+)')
+					end
+					table.insert(found, {
+						type = state_type,
+						id = state_type .. "/" .. stem .. ".json",
+						label = name .. ".json",
+						epoch = epoch and tonumber(epoch),
+					})
+				end
+			end
+			table.sort(found, function(a, b)
+				return a.id < b.id
+			end)
+			for _, entry in ipairs(found) do
+				table.insert(entries, entry)
+			end
+		end
 	end
+	return entries
 end
 
--- build a table with the output of the file finder function
----@param stdout string|nil
+-- build the InputSelector choices from the listed state files
+---@param entries table[]
 ---@param opts table
 ---@return table
-local function insert_choices(stdout, opts)
+local function insert_choices(entries, opts)
 	-- this structure will contain the formatting costs for each elements
 	local fmt_cost = {}
 	-- pre-calculation of formatting cost
-	local types = { "workspace", "window", "tab" }
+	local types = STATE_TYPES
 	local state_files = {}
 	local files = {
 		workspace = {},
@@ -173,20 +111,15 @@ local function insert_choices(stdout, opts)
 		tab = {},
 	}
 	local max_length = 0
-
-	if stdout == nil then
+	if #entries == 0 then
 		return state_files
 	end
 
-	-- Parse the stdout and construct the file table
-	for line in stdout:gmatch("[^\n]+") do
-		local epoch, type, file = line:match("%s*(%d+)%s+.+[/\\]([^/\\]+)[/\\]([^/\\]+%.json)$")
-		-- epoch in this case represents the last modified date/time according to the OS
-		-- For Unix/POSIX Epoch is counted from January 1st, 1970 0 UTC
-		-- MacOS it is from January 1st, 1904 0 UTC
-		-- Windows NTFS (up to Win 11) it is from January 1st, 1601 0 UTC
-		-- The function `os.date()` used later on will convert the date according to the host OS
-		if epoch and file and type and not opts[string.format("ignore_%ss", type)] then
+	for _, entry in ipairs(entries) do
+		-- epoch is the Unix time stored in the state file (only read when dates are shown);
+		-- the `os.date()` call below converts it for the host OS
+		local epoch, type, file = entry.epoch, entry.type, entry.label
+		if file and type and not opts[string.format("ignore_%ss", type)] then
 			-- consider the "cost" of the formatting of the filename, i.e., if the format function adds characters
 			-- to the visible part of the file section, we test the three possible formatter to get the highest cost
 			-- we use a real entry instead of an empty string to prevent formatting error if the format function has
@@ -212,7 +145,7 @@ local function insert_choices(stdout, opts)
 				end
 				-- Calculate the cost for formatting the date
 				if opts.show_state_with_date then
-					local str_date = " " .. os.date(opts.date_format, tonumber(epoch))
+					local str_date = " " .. os.date(opts.date_format, tonumber(epoch) or os.time())
 					fmt_cost.str_date = utils.utf8len(str_date)
 					if opts.fmt_date then
 						fmt_cost.fmt_date = utils.utf8len(utils.strip_format_esc_seq(opts.fmt_date(str_date)))
@@ -227,8 +160,8 @@ local function insert_choices(stdout, opts)
 
 			local date = ""
 			if opts.show_state_with_date then
-				date = " " .. os.date(opts.date_format, tonumber(epoch))
-				if opts.fmt_date then
+				date = epoch and (" " .. os.date(opts.date_format, epoch)) or ""
+				if opts.fmt_date and date ~= "" then
 					date = opts.fmt_date(date)
 				end
 			end
@@ -237,7 +170,7 @@ local function insert_choices(stdout, opts)
 			-- collecting all relevant information about the file
 			local fmt = opts[string.format("fmt_%s", type)]
 			table.insert(files[type], {
-				id = type .. utils.separator .. file,
+				id = entry.id,
 				filename = file,
 				filename_len = filename_len,
 				date = date,
@@ -310,6 +243,14 @@ local function insert_choices(stdout, opts)
 	return state_files
 end
 
+---The InputSelector choices for the saved states: `{ id = "<type>/<stem>.json", label }`.
+---@param opts fuzzy_load_opts?
+---@return table[]
+function pub.list_choices(opts)
+	opts = utils.tbl_deep_extend("force", pub.default_fuzzy_load_opts, opts or {})
+	return insert_choices(find_state_files(require("resurrect.state_manager").save_state_dir, opts), opts)
+end
+
 ---A fuzzy finder to restore saved state
 ---@param window MuxWindow
 ---@param pane Pane
@@ -320,13 +261,7 @@ function pub.fuzzy_load(window, pane, callback, opts)
 
 	opts = utils.tbl_deep_extend("force", pub.default_fuzzy_load_opts, opts or {})
 
-	local folder = require("resurrect.state_manager").save_state_dir
-
-	-- Always use the recursive search function
-	local stdout = find_json_files_recursive(folder)
-
-	-- build the choice list for the InputSelector
-	local state_files = insert_choices(stdout, opts)
+	local state_files = pub.list_choices(opts)
 
 	if #state_files == 0 then
 		wezterm.emit("resurrect.error", "No existing state files to select")
